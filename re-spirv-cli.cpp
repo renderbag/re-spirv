@@ -155,11 +155,11 @@ int main(int argc, char *argv[]) {
     auto endParsingTime = std::chrono::high_resolution_clock::now();
     std::vector<uint8_t> optimizedData;
     std::vector<respv::SpecConstant> specConstants = {
-        respv::SpecConstant(0, { 3356565624U }),
+        respv::SpecConstant(0, { 202973304U }),
         respv::SpecConstant(1, { 1584128U }),
-        respv::SpecConstant(2, { 4229999620U }),
-        respv::SpecConstant(3, { 4279211007U }),
-        respv::SpecConstant(4, { 747626510U }),
+        respv::SpecConstant(2, { 4229332576U }),
+        respv::SpecConstant(3, { 905772926U }),
+        respv::SpecConstant(4, { 680132622U }),
     };
 
     auto beginRunTime = std::chrono::high_resolution_clock::now();

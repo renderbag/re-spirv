@@ -798,6 +798,11 @@ namespace respv {
                 listIndex = listNode.nextListIndex;
             }
         }
+        
+        if (instructionOrder.size() < instructions.size()) {
+            fprintf(stderr, "Sorting shader failed, possibly due to a cyclic dependency in the instruction graph (possibly from loop operations).\n");
+            return false;
+        }
 
         std::vector<InstructionSort> instructionSortVector;
         instructionSortVector.clear();

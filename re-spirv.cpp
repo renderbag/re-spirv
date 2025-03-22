@@ -643,7 +643,11 @@ namespace respv {
                     }
 
                     uint32_t resultIndex = results[operandId].instructionIndex;
-                    instructions[resultIndex].adjacentListIndex = addToList(i, instructions[resultIndex].adjacentListIndex);
+                    bool operandComesFromBackEdge = (opCode == SpvOpPhi) && (resultIndex > i);
+                    if (!operandComesFromBackEdge) {
+                        instructions[resultIndex].adjacentListIndex = addToList(i, instructions[resultIndex].adjacentListIndex);
+                    }
+
                     operandWordIndex += operandWordStride;
                 }
             }
@@ -681,9 +685,12 @@ namespace respv {
                         fprintf(stderr, "SPIR-V Parsing error. Invalid Parent ID: %u.\n", labelId);
                         return false;
                     }
-
+                    
                     uint32_t labelIndex = results[labelId].instructionIndex;
-                    instructions[labelIndex].adjacentListIndex = addToList(i, instructions[labelIndex].adjacentListIndex);
+                    bool labelComesFromBackEdge = (labelIndex > i);
+                    if (!labelComesFromBackEdge) {
+                        instructions[labelIndex].adjacentListIndex = addToList(i, instructions[labelIndex].adjacentListIndex);
+                    }
                 }
             }
             // Parse decorations.
@@ -797,6 +804,11 @@ namespace respv {
 
                 listIndex = listNode.nextListIndex;
             }
+        }
+
+        if (instructionOrder.size() < instructions.size()) {
+            fprintf(stderr, "Sorting shader failed, possibly due to a cyclic dependency in the instruction graph.\n");
+            return false;
         }
 
         std::vector<InstructionSort> instructionSortVector;
@@ -945,7 +957,11 @@ namespace respv {
                         }
 
                         uint32_t operandId = optimizedWords[wordIndex + operandWordIndex];
-                        rResultStack.emplace_back(operandId);
+                        bool operandComesFromBackEdge = (opCode == SpvOpPhi) && (rContext.shader.results[operandId].instructionIndex > instructionIndex);
+                        if (!operandComesFromBackEdge) {
+                            rResultStack.emplace_back(operandId);
+                        }
+
                         operandWordIndex += operandWordStride;
                     }
                 }
@@ -1299,7 +1315,11 @@ namespace respv {
                             }
 
                             uint32_t operandId = optimizedWords[wordIndex + operandWordIndex];
-                            resultStack.emplace_back(operandId);
+                            bool operandComesFromBackEdge = (opCode == SpvOpPhi) && (rContext.shader.results[operandId].instructionIndex > instructionIndex);
+                            if (!operandComesFromBackEdge) {
+                                resultStack.emplace_back(operandId);
+                            }
+
                             operandWordIndex += operandWordStride;
                         }
                     }
@@ -1549,8 +1569,9 @@ namespace respv {
                             fprintf(stderr, "Error in resolution of the operations. Operand %u was not solved.\n", operandId);
                             return false;
                         }
-
-                        if (rContext.resolutions[operandId].type == Resolution::Type::Variable) {
+                        
+                        bool operandComesFromBackEdge = (opCode == SpvOpPhi) && (rContext.shader.results[operandId].instructionIndex > instructionIndex);
+                        if ((rContext.resolutions[operandId].type == Resolution::Type::Variable) || operandComesFromBackEdge) {
                             allOperandsAreConstant = false;
                             break;
                         }

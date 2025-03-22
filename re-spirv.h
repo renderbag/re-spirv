@@ -106,6 +106,7 @@ namespace respv {
         std::vector<Decoration> decorations;
         std::vector<Phi> phis;
         std::vector<ListNode> listNodes;
+        std::vector<bool> backEdgeWordLabels;
         uint32_t defaultSwitchOpConstantInt = UINT32_MAX;
 
         Shader();

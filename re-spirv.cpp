@@ -575,11 +575,14 @@ namespace respv {
             wordIndex += wordCount;
         }
 
+        backEdgeWordLabels.resize(spirvWordCount, false);
+
         return true;
     }
 
     bool Shader::process() {
         bool foundOpSwitch = false;
+        uint32_t currentBlock = UINT32_MAX;
         for (uint32_t i = 0; i < uint32_t(instructions.size()); i++) {
             uint32_t wordIndex = instructions[i].wordIndex;
             SpvOp opCode = SpvOp(spirvWords[wordIndex] & 0xFFFFU);
@@ -626,7 +629,7 @@ namespace respv {
                     if (checkOperandWordSkip(wordIndex, spirvWords, j, operandWordSkip, operandWordSkipString, operandWordIndex)) {
                         continue;
                     }
-
+                    
                     if (operandWordIndex >= wordCount) {
                         break;
                     }
@@ -652,7 +655,12 @@ namespace respv {
             uint32_t labelWordStart, labelWordCount, labelWordStride;
             if (SpvHasLabels(opCode, labelWordStart, labelWordCount, labelWordStride)) {
                 for (uint32_t j = 0; (j < labelWordCount) && ((labelWordStart + j * labelWordStride) < wordCount); j++) {
-                    uint32_t labelId = spirvWords[wordIndex + labelWordStart + j * labelWordStride];
+                    uint32_t spirvWordIndex = wordIndex + labelWordStart + j * labelWordStride;
+                    if (backEdgeWordLabels[spirvWordIndex]) {
+                        continue;
+                    }
+
+                    uint32_t labelId = spirvWords[spirvWordIndex];
                     if (labelId >= results.size()) {
                         fprintf(stderr, "SPIR-V Parsing error. Invalid Operand ID: %u.\n", labelId);
                         return false;
@@ -669,7 +677,11 @@ namespace respv {
             }
 
             // Parse parented blocks of OpPhi to indicate the dependency.
-            if (opCode == SpvOpPhi) {
+            if (opCode == SpvOpLabel) {
+                uint32_t resultId = spirvWords[wordIndex + 1];
+                currentBlock = resultId;
+            }
+            else if (opCode == SpvOpPhi) {
                 for (uint32_t j = 3; j < wordCount; j += 2) {
                     uint32_t labelId = spirvWords[wordIndex + j + 1];
                     if (labelId >= results.size()) {
@@ -712,6 +724,50 @@ namespace respv {
             else if (opCode == SpvOpSwitch) {
                 foundOpSwitch = true;
             }
+            // When we find a loop merge, we go to the continue block and search for the branch that
+            // references back to the current block. We mark the word for the label as a back edge
+            // that should be ignored from analysis.
+            else if (opCode == SpvOpLoopMerge) {
+                uint32_t continueId = spirvWords[wordIndex + 2];
+                if (continueId >= results.size()) {
+                    fprintf(stderr, "SPIR-V Parsing error. Invalid Operand ID: %u.\n", continueId);
+                    return false;
+                }
+
+                uint32_t resultInstructionIndex = results[continueId].instructionIndex;
+                if (resultInstructionIndex == UINT32_MAX) {
+                    fprintf(stderr, "SPIR-V Parsing error. Invalid Operand ID: %u.\n", continueId);
+                    return false;
+                }
+
+                bool terminatorFound = false;
+                for (uint32_t i = resultInstructionIndex; i < instructions.size(); i++) {
+                    uint32_t resultWordIndex = instructions[i].wordIndex;
+                    SpvOp resultOpCode = SpvOp(spirvWords[resultWordIndex] & 0xFFFFU);
+                    if (SpvOpIsTerminator(resultOpCode)) {
+                        if (SpvHasLabels(resultOpCode, labelWordStart, labelWordCount, labelWordStride)) {
+                            for (uint32_t j = 0; (j < labelWordCount) && ((labelWordStart + j * labelWordStride) < wordCount); j++) {
+                                uint32_t spirvWordIndex = resultWordIndex + labelWordStart + j * labelWordStride;
+                                uint32_t labelId = spirvWords[spirvWordIndex];
+
+                                // Indicate a back edge would originate from parsing this word so it's ignored in future analysis.
+                                if (labelId == currentBlock) {
+                                    backEdgeWordLabels[spirvWordIndex] = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        terminatorFound = true;
+                        break;
+                    }
+                }
+
+                if (!terminatorFound) {
+                    fprintf(stderr, "SPIR-V Parsing error. Invalid Operand ID: %u.\n", continueId);
+                    return false;
+                }
+            }
         }
 
         if (foundOpSwitch && (defaultSwitchOpConstantInt == UINT32_MAX)) {
@@ -746,7 +802,7 @@ namespace respv {
             return instructionIndex < i.instructionIndex;
         }
     };
-
+    
     bool Shader::sort() {
         // Count the in and out degrees for all instructions.
         instructionInDegrees.clear();
@@ -797,6 +853,11 @@ namespace respv {
 
                 listIndex = listNode.nextListIndex;
             }
+        }
+
+        if (instructionOrder.size() < instructions.size()) {
+            fprintf(stderr, "Sorting shader failed, possibly due to a cyclic dependency in the instruction graph.\n");
+            return false;
         }
 
         std::vector<InstructionSort> instructionSortVector;
@@ -1279,7 +1340,12 @@ namespace respv {
                     uint32_t labelWordStart, labelWordCount, labelWordStride;
                     if (SpvHasLabels(opCode, labelWordStart, labelWordCount, labelWordStride)) {
                         for (uint32_t j = 0; (j < labelWordCount) && ((labelWordStart + j * labelWordStride) < wordCount); j++) {
-                            uint32_t terminatorLabelId = optimizedWords[wordIndex + labelWordStart + j * labelWordStride];
+                            uint32_t optimizedWordIndex = wordIndex + labelWordStart + j * labelWordStride;
+                            if (rContext.shader.backEdgeWordLabels[optimizedWordIndex]) {
+                                continue;
+                            }
+
+                            uint32_t terminatorLabelId = optimizedWords[optimizedWordIndex];
                             labelStack.emplace_back(terminatorLabelId);
                         }
                     }
@@ -1456,7 +1522,8 @@ namespace respv {
                     uint32_t labelWordStart, labelWordCount, labelWordStride;
                     if (SpvHasLabels(searchOpCode, labelWordStart, labelWordCount, labelWordStride)) {
                         for (uint32_t j = 0; (j < labelWordCount) && ((labelWordStart + j * labelWordStride) < searchWordCount); j++) {
-                            uint32_t searchLabelId = optimizedWords[searchWordIndex + labelWordStart + j * labelWordStride];
+                            uint32_t optimizedWordIndex = searchWordIndex + labelWordStart + j * labelWordStride;
+                            uint32_t searchLabelId = optimizedWords[optimizedWordIndex];
                             if (searchLabelId == instructionLabelId) {
                                 foundBranchToThisBlock = true;
                                 break;

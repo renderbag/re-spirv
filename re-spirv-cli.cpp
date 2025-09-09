@@ -147,23 +147,29 @@ int main(int argc, char *argv[]) {
 
     auto beginParsingTime = std::chrono::high_resolution_clock::now();
     respv::Shader shader;
-    if (!shader.parse(fileData.data(), fileData.size())) {
+    if (!shader.parse(fileData.data(), fileData.size(), true)) {
         fprintf(stderr, "Failed to parse SPIR-V data from %s.\n", inputPath);
         return 1;
     }
     
     auto endParsingTime = std::chrono::high_resolution_clock::now();
+    if (!shader.inlinedSpirvWords.empty()) {
+        fprintf(stderr, "Dumped intermediate inline data.\n");
+        std::ofstream outputStream(std::filesystem::u8path(outputPath).concat(".inlined"), std::ios::binary);
+        outputStream.write(reinterpret_cast<const char *>(shader.inlinedSpirvWords.data()), shader.inlinedSpirvWords.size() * sizeof(uint32_t));
+    }
+
     std::vector<uint8_t> optimizedData;
     std::vector<respv::SpecConstant> specConstants = {
-        respv::SpecConstant(0, { 3356565624U }),
-        respv::SpecConstant(1, { 1584128U }),
-        respv::SpecConstant(2, { 4229999620U }),
-        respv::SpecConstant(3, { 4279211007U }),
-        respv::SpecConstant(4, { 747626510U }),
+        respv::SpecConstant(0, { 1627787444U }),
+        respv::SpecConstant(1, { 0U })
     };
 
+    respv::Options optimizationOptions;
+    optimizationOptions.removeDeadCode = true;
+
     auto beginRunTime = std::chrono::high_resolution_clock::now();
-    if (!respv::Optimizer::run(shader, specConstants.data(), specConstants.size(), optimizedData)) {
+    if (!respv::Optimizer::run(shader, specConstants.data(), specConstants.size(), optimizedData, optimizationOptions)) {
         fprintf(stderr, "Failed to optimize SPIR-V data from %s.\n", inputPath);
         return 1;
     }
@@ -173,6 +179,7 @@ int main(int argc, char *argv[]) {
     double optimizationTime = std::chrono::duration_cast<std::chrono::microseconds>(endRunTime - beginRunTime).count() / 1000.0f;
     fprintf(stdout, "Parsing time: %f ms\n", parsingTime);
     fprintf(stdout, "Optimization time: %f ms\n", optimizationTime);
+    fprintf(stdout, "Size: %llu bytes -> %llu bytes\n", fileData.size(), optimizedData.size());
 
     std::ofstream outputStream(std::filesystem::u8path(outputPath), std::ios::binary);
     if (!outputStream.is_open()) {

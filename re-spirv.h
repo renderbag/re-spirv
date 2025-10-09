@@ -28,10 +28,39 @@ namespace respv {
 
     struct Instruction {
         uint32_t wordIndex = UINT32_MAX;
-        uint32_t adjacentListIndex = UINT32_MAX;
+        uint32_t blockIndex = UINT32_MAX;
 
-        Instruction(uint32_t pWordIndex) {
+        Instruction(uint32_t pWordIndex, uint32_t pBlockIndex) {
             wordIndex = pWordIndex;
+            blockIndex = pBlockIndex;
+        }
+    };
+
+    struct Block {
+        uint32_t labelInstructionIndex = UINT32_MAX;
+        uint32_t terminatorInstructionIndex = UINT32_MAX;
+
+        Block() {
+            // Empty.
+        }
+
+        Block(uint32_t pLabelInstructionIndex, uint32_t pTerminatorInstructionIndex) {
+            labelInstructionIndex = pLabelInstructionIndex;
+            terminatorInstructionIndex = pTerminatorInstructionIndex;
+        }
+    };
+
+    struct Function {
+        uint32_t instructionIndex = UINT32_MAX;
+        uint32_t labelInstructionIndex = UINT32_MAX;
+
+        Function() {
+            // Empty.
+        }
+
+        Function(uint32_t pInstructionIndex, uint32_t pLabelInstructionIndex) {
+            instructionIndex = pInstructionIndex;
+            labelInstructionIndex = pLabelInstructionIndex;
         }
     };
 
@@ -73,6 +102,30 @@ namespace respv {
         }
     };
 
+    struct Variable {
+        uint32_t instructionIndex = UINT32_MAX;
+
+        Variable() {
+            // Empty.
+        }
+
+        Variable(uint32_t pInstructionIndex) {
+            instructionIndex = pInstructionIndex;
+        }
+    };
+
+    struct AccessChain {
+        uint32_t instructionIndex = UINT32_MAX;
+
+        AccessChain() {
+            // Empty.
+        }
+
+        AccessChain(uint32_t pInstructionIndex) {
+            instructionIndex = pInstructionIndex;
+        }
+    };
+
     struct Phi {
         uint32_t instructionIndex = UINT32_MAX;
 
@@ -85,9 +138,27 @@ namespace respv {
         }
     };
 
+    struct LoopHeader {
+        uint32_t instructionIndex = UINT32_MAX;
+        uint32_t blockInstructionIndex = UINT32_MAX;
+
+        LoopHeader() {
+            // Empty.
+        }
+
+        LoopHeader(uint32_t pInstructionIndex, uint32_t pBlockInstructionIndex) {
+            instructionIndex = pInstructionIndex;
+            blockInstructionIndex = pBlockInstructionIndex;
+        }
+    };
+
     struct ListNode {
         uint32_t instructionIndex = UINT32_MAX;
         uint32_t nextListIndex = UINT32_MAX;
+
+        ListNode() {
+            // Empty.
+        }
 
         ListNode(uint32_t pInstructionIndex, uint32_t pNextListIndex) {
             instructionIndex = pInstructionIndex;
@@ -96,27 +167,39 @@ namespace respv {
     };
 
     struct Shader {
-        const uint32_t *spirvWords = nullptr;
-        size_t spirvWordCount = 0;
+        const uint32_t *extSpirvWords = nullptr;
+        size_t extSpirvWordCount = 0;
+        std::vector<uint32_t> inlinedSpirvWords;
         std::vector<Instruction> instructions;
+        std::vector<uint32_t> instructionAdjacentListIndices;
         std::vector<uint32_t> instructionInDegrees;
         std::vector<uint32_t> instructionOutDegrees;
         std::vector<uint32_t> instructionOrder;
+        std::vector<Block> blocks;
+        std::vector<uint32_t> blockPreOrderIndices;
+        std::vector<uint32_t> blockPostOrderIndices;
+        std::vector<Function> functions;
+        std::vector<uint32_t> variableOrder;
         std::vector<Result> results;
         std::vector<Specialization> specializations;
         std::vector<Decoration> decorations;
         std::vector<Phi> phis;
+        std::vector<LoopHeader> loopHeaders;
         std::vector<ListNode> listNodes;
         uint32_t defaultSwitchOpConstantInt = UINT32_MAX;
 
         Shader();
-        Shader(const void *pData, size_t pSize);
+        
+        // Data is only copied if pInlineFunctions is true. An extra processing pass is required if inlining is enabled.
+        // This step is usually not required unless the shader compiler has disabled optimizations.
+        Shader(const void *pData, size_t pSize, bool pInlineFunctions);
         void clear();
-        uint32_t addToList(uint32_t pInstructionIndex, uint32_t pListIndex);
-        bool parseWords(const void *pData, size_t pSize);
-        bool parse(const void *pData, size_t pSize);
-        bool process();
-        bool sort();
+        bool checkData(const void *pData, size_t pSize);
+        bool inlineData(const void *pData, size_t pSize);
+        bool parseData(const void *pData, size_t pSize);
+        bool parse(const void *pData, size_t pSize, bool pInlineFunctions);
+        bool process(const void *pData, size_t pSize);
+        bool sort(const void *pData, size_t pSize);
         bool empty() const;
     };
 

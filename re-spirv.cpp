@@ -819,6 +819,7 @@ namespace respv {
             uint32_t functionWordCount = 0;
             uint32_t codeWordCount = 0;
             uint32_t variableWordCount = 0;
+            uint32_t decorationWordCount = 0;
             uint32_t inlineWordCount = 0;
             uint32_t returnValueCount = 0;
             uint32_t callIndex = 0;
@@ -858,14 +859,29 @@ namespace respv {
                 // Regular constructor.
             }
         };
+
+        struct FunctionResult {
+            uint32_t wordIndex = UINT32_MAX;
+            uint32_t decorationIndex = UINT32_MAX;
+        };
+
+        struct ResultDecoration {
+            uint32_t wordIndex = 0;
+            uint32_t nextDecorationIndex = 0;
+
+            ResultDecoration(uint32_t wordIndex, uint32_t nextDecorationIndex) : wordIndex(wordIndex), nextDecorationIndex(nextDecorationIndex) {
+                // Regular constructor.
+            }
+        };
         
         // Parse all instructions in the shader first.
         const uint32_t *dataWords = reinterpret_cast<const uint32_t *>(pData);
         const size_t dataWordCount = pSize / sizeof(uint32_t);
         const uint32_t dataIdBound = dataWords[3];
+        std::vector<FunctionResult> functionResultMap;
+        std::vector<ResultDecoration> resultDecorations;
         std::vector<uint32_t> loopMergeIdStack;
-        std::vector<bool> localVariableMap;
-        localVariableMap.resize(dataIdBound, false);
+        functionResultMap.resize(dataIdBound);
 
         std::vector<FunctionDefinition> functionDefinitions;
         std::vector<FunctionParameter> functionParameters;
@@ -927,7 +943,7 @@ namespace respv {
                     fprintf(stderr, "Found function call without a function start.\n");
                     return false;
                 }
-                
+
                 currentFunction.codeWordCount += wordCount;
 
                 if (currentFunction.callCount == 0) {
@@ -937,11 +953,28 @@ namespace respv {
                 functionCalls.emplace_back(parseWordIndex, dataWords[parseWordIndex + 3], sameBlockWordCount);
                 currentFunction.callCount++;
                 break;
+            case SpvOpDecorate: {
+                uint32_t resultId = dataWords[parseWordIndex + 1];
+                if (resultId > dataIdBound) {
+                    fprintf(stderr, "Found decoration with invalid result %u.\n", resultId);
+                    return false;
+                }
+
+                uint32_t nextDecorationIndex = functionResultMap[resultId].decorationIndex;
+                functionResultMap[resultId].decorationIndex = uint32_t(resultDecorations.size());
+                resultDecorations.emplace_back(parseWordIndex, nextDecorationIndex);
+                globalWordCount += wordCount;
+                break;
+            }
             case SpvOpVariable:
                 if (currentFunction.resultId != UINT32_MAX) {
                     // Identify the variable as a local function variable.
                     uint32_t resultId = dataWords[parseWordIndex + 2];
-                    localVariableMap[resultId] = true;
+                    if (resultId > dataIdBound) {
+                        fprintf(stderr, "Found variable with invalid result %u.\n", resultId);
+                        return false;
+                    }
+
                     currentFunction.variableWordCount += wordCount;
                 }
                 else {
@@ -1048,6 +1081,28 @@ namespace respv {
                 break;
             }
 
+            if (currentFunction.resultId != UINT32_MAX) {
+                bool hasResult, hasType;
+                SpvHasResultAndType(opCode, &hasResult, &hasType);
+
+                if (hasResult) {
+                    // Indicate the result is associated to a function.
+                    uint32_t resultId = dataWords[parseWordIndex + (hasType ? 2 : 1)];
+                    functionResultMap[resultId].wordIndex = parseWordIndex;
+
+                    // Look for all decorations associated to this result. These will be skipped when rewriting
+                    // the shader and written back when the result is parsed again.
+                    uint32_t decorationIndex = functionResultMap[resultId].decorationIndex;
+                    while (decorationIndex != UINT32_MAX) {
+                        const ResultDecoration &decoration = resultDecorations[decorationIndex];
+                        uint32_t decorationWordCount = (dataWords[decoration.wordIndex] >> 16U) & 0xFFFFU;
+                        currentFunction.decorationWordCount += decorationWordCount;
+                        globalWordCount -= decorationWordCount;
+                        decorationIndex = decoration.nextDecorationIndex;
+                    }
+                }
+            }
+
             parseWordIndex += wordCount;
         }
 
@@ -1092,12 +1147,14 @@ namespace respv {
         }
         
         uint32_t codeWordCount = 0;
+        uint32_t functionDecorationWordCount = 0;
         while (!functionStack.empty()) {
             FunctionItem &functionItem = functionStack.back();
             if (functionItem.callIndex == functionItem.function->callCount) {
                 // Add this function's code and variables.
                 codeWordCount += functionItem.function->codeWordCount;
                 codeWordCount += functionItem.function->variableWordCount;
+                functionDecorationWordCount += functionItem.function->decorationWordCount;
 
                 // This function will be inlined so its variables should be reserved on the parent function instead.
                 if (functionItem.function->canInline) {
@@ -1137,7 +1194,7 @@ namespace respv {
         }
 
         // Figure out the total size of the shader and copy the header.
-        size_t totalWordCount = SpvStartWordIndex + globalWordCount + codeWordCount;
+        size_t totalWordCount = SpvStartWordIndex + globalWordCount + codeWordCount + functionDecorationWordCount;
         inlinedSpirvWords.resize(totalWordCount);
         memcpy(inlinedSpirvWords.data(), pData, SpvStartWordIndex * sizeof(uint32_t));
 
@@ -1159,21 +1216,27 @@ namespace respv {
         loadMap.resize(dataIdBound, UINT32_MAX);
         phiMap.resize(dataIdBound, UINT32_MAX);
 
-        auto copyInstruction = [&](uint32_t dataWordIndex, bool renameResult, uint32_t &copyWordIndex) {
+        auto copyInstruction = [&](uint32_t dataWordIndex, bool renameResult, uint32_t &copyWordIndex, uint32_t &copyDecorationIndex) {
+            copyDecorationIndex = UINT32_MAX;
+
             SpvOp opCode = SpvOp(dataWords[dataWordIndex] & 0xFFFFU);
             uint32_t wordCount = (dataWords[dataWordIndex] >> 16U) & 0xFFFFU;
             for (uint32_t i = 0; i < wordCount; i++) {
                 inlinedSpirvWords[copyWordIndex + i] = dataWords[dataWordIndex + i];
             }
 
-            // Any inlined functions must remap all their results and operands.
-            if (renameResult) {
-                bool hasResult, hasType;
-                SpvHasResultAndType(opCode, &hasResult, &hasType);
+            bool hasResult, hasType;
+            SpvHasResultAndType(opCode, &hasResult, &hasType);
 
-                if (hasResult) {
+            if (hasResult) {
+                // Any inlined functions must remap all their results and operands.
+                uint32_t &resultId = inlinedSpirvWords[copyWordIndex + (hasType ? 2 : 1)];
+                if ((resultId < dataIdBound) && (functionResultMap[resultId].wordIndex != UINT32_MAX)) {
+                    copyDecorationIndex = functionResultMap[resultId].decorationIndex;
+                }
+
+                if (renameResult) {
                     // First labels in a function will be replaced by the assigned label if present.
-                    uint32_t &resultId = inlinedSpirvWords[copyWordIndex + (hasType ? 2 : 1)];
                     uint32_t newResultId;
                     if ((opCode == SpvOpLabel) && (callStack.back().startBlockId != UINT32_MAX) && !callStack.back().startBlockIdAssigned) {
                         newResultId = callStack.back().startBlockId;
@@ -1241,7 +1304,18 @@ namespace respv {
             copyWordIndex += wordCount;
         };
 
+        auto copyDecorations = [&](uint32_t copyDecorationIndex, uint32_t &copyWordIndex) {
+            uint32_t placeholderWordIndex;
+            while (copyDecorationIndex != UINT32_MAX) {
+                copyInstruction(resultDecorations[copyDecorationIndex].wordIndex, false, copyWordIndex, placeholderWordIndex);
+                copyDecorationIndex = resultDecorations[copyDecorationIndex].nextDecorationIndex;
+            }
+        };
+
         // Perform the final pass for inlining all functions.
+        uint32_t copyDecorationIndex;
+        uint32_t dstInlinedDecorationWordIndex = UINT32_MAX;
+        uint32_t dstInlinedDecorationWordIndexMax = UINT32_MAX;
         uint32_t dstInlinedVariableWordIndex = UINT32_MAX;
         uint32_t dstInlinedVariableWordIndexMax = UINT32_MAX;
         callStack.emplace_back(SpvStartWordIndex);
@@ -1378,7 +1452,8 @@ namespace respv {
                 if (!callStack.empty()) {
                     // Copy the same block operations and rename the results even if the function wasn't inlined.
                     for (uint32_t sameBlockWordIndex : callStack.back().sameBlockOperations) {
-                        copyInstruction(sameBlockWordIndex, true, dstWordIndex);
+                        copyInstruction(sameBlockWordIndex, true, dstWordIndex, copyDecorationIndex);
+                        copyDecorations(copyDecorationIndex, dstInlinedDecorationWordIndex);
                     }
 
                     callStack.back().wordIndex -= wordCount;
@@ -1454,6 +1529,20 @@ namespace respv {
 
                 break;
             }
+            case SpvOpDecorate: {
+                if (dstInlinedDecorationWordIndex == UINT32_MAX) {
+                    // Upon encountering the first decoration in the shader, reserve space to write out any decorations
+                    // that are found to be linked to function results.
+                    dstInlinedDecorationWordIndex = dstWordIndex;
+                    dstWordIndex += functionDecorationWordCount;
+                    dstInlinedDecorationWordIndexMax = dstWordIndex;
+                }
+
+                // Only copy the decoration as-is if it doesn't belong to a result in a function.
+                uint32_t resultId = dataWords[callWordIndex + 1];
+                copyWords = (functionResultMap[resultId].wordIndex == UINT32_MAX);
+                break;
+            }
             case SpvOpVariable:
                 if ((callStack.back().functionId < UINT32_MAX) && !callStack.back().functionInlined) {
                     // As soon as we find a variable local to the function, reserve the space to insert all
@@ -1518,7 +1607,7 @@ namespace respv {
                 // Ignore load operations with memory operands.
                 if (wordCount == 4) {
                     uint32_t pointerId = dataWords[callStack.back().wordIndex + 3];
-                    if (localVariableMap[pointerId] && (storeMap[pointerId] < dataIdBound)) {
+                    if ((functionResultMap[pointerId].wordIndex != UINT32_MAX) && (storeMap[pointerId] < dataIdBound)) {
                         uint32_t resultId = dataWords[callStack.back().wordIndex + 2];
                         if (loadMap[resultId] != storeMap[pointerId]) {
                             loadMap[resultId] = storeMap[pointerId];
@@ -1557,15 +1646,17 @@ namespace respv {
 
             if (copyWords) {
                 uint32_t &copyWordIndex = copyWordsToVariables ? dstInlinedVariableWordIndex : dstWordIndex;
-                copyInstruction(callWordIndex, callStack.back().functionInlined, copyWordIndex);
-
-                // Make sure enough space was reserved for variables.
-                assert(!copyWordsToVariables || copyWordIndex <= dstInlinedVariableWordIndexMax);
+                copyInstruction(callWordIndex, callStack.back().functionInlined, copyWordIndex, copyDecorationIndex);
+                copyDecorations(copyDecorationIndex, dstInlinedDecorationWordIndex);
             }
 
             if (!callStack.empty()) {
                 callStack.back().wordIndex += wordCount;
             }
+
+            assert(dstWordIndex <= totalWordCount && "Not enough words were reserved for the shader.");
+            assert(dstInlinedVariableWordIndex <= dstInlinedVariableWordIndexMax && "Not enough words were reserved for inlined variables.");
+            assert(dstInlinedDecorationWordIndex <= dstInlinedDecorationWordIndexMax && "Not enough words were reserved for function decorations.");
         }
 
         if (dstWordIndex != totalWordCount) {

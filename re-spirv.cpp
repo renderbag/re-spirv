@@ -1797,11 +1797,18 @@ namespace respv {
         // Greatly decreases the costs of adding nodes to the linked list.
         listNodes.reserve(instructions.size() * 2);
 
+        thread_local std::vector<uint32_t> loopMergeBlockStack;
+        thread_local std::vector<uint32_t> loopMergeInstructionStack;
+        thread_local std::vector<bool> preOrderVisitedBlocks;
+        thread_local std::vector<bool> postOrderVisitedBlocks;
+        loopMergeBlockStack.clear();
+        loopMergeInstructionStack.clear();
+        preOrderVisitedBlocks.clear();
+        postOrderVisitedBlocks.clear();
+
         bool foundOpSwitch = false;
         const uint32_t *dataWords = reinterpret_cast<const uint32_t *>(pData);
         const size_t dataWordCount = pSize / sizeof(uint32_t);
-        std::vector<uint32_t> loopMergeBlockStack;
-        std::vector<uint32_t> loopMergeInstructionStack;
         uint32_t currentBlockId = 0;
         uint32_t currentLoopHeaderIndex = 0;
         for (uint32_t i = 0; i < uint32_t(instructions.size()); i++) {
@@ -1992,8 +1999,8 @@ namespace respv {
         
         // Do a pre-order and post-order traversal of the tree starting from each function. These indices are
         // later used to figure out whether instructions dominate other instructions when doing optimizations.
-        std::vector<bool> preOrderVisitedBlocks;
-        std::vector<bool> postOrderVisitedBlocks;
+        thread_local std::vector<uint32_t> blockIndexStack;
+        thread_local std::vector<uint32_t> blockAdjacentStack;
         uint32_t preOrderIndex = 0;
         uint32_t postOrderIndex = 0;
         blockPreOrderIndices.resize(blocks.size(), 0);
@@ -2003,8 +2010,8 @@ namespace respv {
         for (uint32_t i = 0; i < uint32_t(functions.size()); i++) {
             const Function &function = functions[i];
             const Instruction &functionLabelInstruction = instructions[function.labelInstructionIndex];
-            std::vector<uint32_t> blockIndexStack;
-            std::vector<uint32_t> blockAdjacentStack;
+            blockIndexStack.clear();
+            blockAdjacentStack.clear();
             blockIndexStack.emplace_back(functionLabelInstruction.blockIndex);
             blockAdjacentStack.emplace_back(UINT32_MAX);
             while (!blockIndexStack.empty()) {
@@ -2089,14 +2096,18 @@ namespace respv {
             }
         }
 
+        // Sort degrees doesn't need to be cleared as its contents will be copied over.
+        thread_local std::vector<uint32_t> sortDegrees;
+        thread_local std::vector<uint32_t> instructionStack;
+        thread_local std::vector<InstructionSort> instructionSortVector;
+        instructionStack.clear();
+        instructionSortVector.clear();
+
         // Make a copy of the degrees as they'll be used to perform a topological sort.
-        std::vector<uint32_t> sortDegrees;
         sortDegrees.resize(instructionInDegrees.size());
         memcpy(sortDegrees.data(), instructionInDegrees.data(), sizeof(uint32_t) * sortDegrees.size());
 
         // The first nodes to be processed should be the ones with no incoming connections.
-        std::vector<uint32_t> instructionStack;
-        instructionStack.clear();
         for (uint32_t i = 0; i < uint32_t(instructions.size()); i++) {
             if (sortDegrees[i] == 0) {
                 instructionStack.emplace_back(i);
@@ -2137,8 +2148,6 @@ namespace respv {
             return false;
         }
 
-        std::vector<InstructionSort> instructionSortVector;
-        instructionSortVector.clear();
         instructionSortVector.resize(instructionOrder.size(), InstructionSort());
         for (uint32_t instructionIndex : instructionOrder) {
             uint64_t nextLevel = instructionSortVector[instructionIndex].instructionLevel + 1;

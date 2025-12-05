@@ -1607,7 +1607,13 @@ namespace respv {
                 // Ignore load operations with memory operands.
                 if (wordCount == 4) {
                     uint32_t pointerId = dataWords[callStack.back().wordIndex + 3];
-                    if ((functionResultMap[pointerId].wordIndex != UINT32_MAX) && (storeMap[pointerId] < dataIdBound)) {
+                    if (pointerId > dataIdBound) {
+                        fprintf(stderr, "Found load operation with invalid pointer %u.\n", pointerId);
+                        return false;
+                    }
+
+                    uint32_t pointerWordIndex = functionResultMap[pointerId].wordIndex;
+                    if ((pointerWordIndex != UINT32_MAX) && (SpvOp(dataWords[pointerWordIndex] & 0xFFFFU) == SpvOpVariable) && (storeMap[pointerId] < dataIdBound)) {
                         uint32_t resultId = dataWords[callStack.back().wordIndex + 2];
                         if (loadMap[resultId] != storeMap[pointerId]) {
                             loadMap[resultId] = storeMap[pointerId];
@@ -1623,7 +1629,17 @@ namespace respv {
                 // Ignore store operations with memory operands.
                 if (wordCount == 3) {
                     uint32_t pointerId = dataWords[callStack.back().wordIndex + 1];
+                    if (pointerId > dataIdBound) {
+                        fprintf(stderr, "Found store operation with invalid pointer %u.\n", pointerId);
+                        return false;
+                    }
+
                     uint32_t resultId = dataWords[callStack.back().wordIndex + 2];
+                    if (resultId > dataIdBound) {
+                        fprintf(stderr, "Found store operation with invalid result %u.\n", resultId);
+                        return false;
+                    }
+
                     if (storeMap[pointerId] != resultId) {
                         storeMap[pointerId] = resultId;
                         storeMapChanges.emplace_back(pointerId);

@@ -799,9 +799,9 @@ namespace respv {
             uint32_t resultType = UINT32_MAX;
             uint32_t resultId = UINT32_MAX;
             uint32_t parameterIndex = 0;
-            std::vector<uint32_t> remapsPending;
-            std::vector<uint32_t> returnParameters;
-            std::vector<uint32_t> sameBlockOperations;
+            uint32_t remapsPendingCount = 0;
+            uint32_t returnParametersCount = 0;
+            uint32_t sameBlockOperationsCount = 0;
             bool startBlockIdAssigned = false;
             bool functionInlined = false;
 
@@ -865,6 +865,18 @@ namespace respv {
             uint32_t decorationIndex = UINT32_MAX;
         };
 
+        typedef std::vector<FunctionDefinition>::iterator FunctionDefinitionIterator;
+
+        struct FunctionItem {
+            FunctionDefinitionIterator function = {};
+            FunctionDefinitionIterator rootFunction = {};
+            uint32_t callIndex = 0;
+
+            FunctionItem(FunctionDefinitionIterator function, FunctionDefinitionIterator rootFunction, uint32_t callIndex) : function(function), rootFunction(rootFunction), callIndex(callIndex) {
+                // Regular constructor.
+            }
+        };
+
         struct ResultDecoration {
             uint32_t wordIndex = 0;
             uint32_t nextDecorationIndex = 0;
@@ -873,19 +885,49 @@ namespace respv {
                 // Regular constructor.
             }
         };
+
+        thread_local std::vector<FunctionResult> functionResultMap;
+        thread_local std::vector<ResultDecoration> resultDecorations;
+        thread_local std::vector<uint32_t> loopMergeIdStack;
+        thread_local std::vector<FunctionDefinition> functionDefinitions;
+        thread_local std::vector<FunctionParameter> functionParameters;
+        thread_local std::vector<FunctionCall> functionCalls;
+        thread_local std::vector<FunctionItem> functionStack;
+        thread_local std::vector<CallItem> callStack;
+        thread_local std::vector<uint32_t> shaderResultMap;
+        thread_local std::vector<uint32_t> storeMap;
+        thread_local std::vector<uint32_t> storeMapChanges;
+        thread_local std::vector<uint32_t> loadMap;
+        thread_local std::vector<uint32_t> loadMapChanges;
+        thread_local std::vector<uint32_t> phiMap;
+        thread_local std::vector<uint32_t> opPhis;
+        thread_local std::vector<uint32_t> remapsPending;
+        thread_local std::vector<uint32_t> returnParameters;
+        thread_local std::vector<uint32_t> sameBlockOperations;
+        functionResultMap.clear();
+        resultDecorations.clear();
+        loopMergeIdStack.clear();
+        functionDefinitions.clear();
+        functionParameters.clear();
+        functionCalls.clear();
+        callStack.clear();
+        shaderResultMap.clear();
+        storeMap.clear();
+        storeMapChanges.clear();
+        loadMap.clear();
+        loadMapChanges.clear();
+        phiMap.clear();
+        opPhis.clear();
+        remapsPending.clear();
+        returnParameters.clear();
+        sameBlockOperations.clear();
         
         // Parse all instructions in the shader first.
         const uint32_t *dataWords = reinterpret_cast<const uint32_t *>(pData);
         const size_t dataWordCount = pSize / sizeof(uint32_t);
         const uint32_t dataIdBound = dataWords[3];
-        std::vector<FunctionResult> functionResultMap;
-        std::vector<ResultDecoration> resultDecorations;
-        std::vector<uint32_t> loopMergeIdStack;
         functionResultMap.resize(dataIdBound);
 
-        std::vector<FunctionDefinition> functionDefinitions;
-        std::vector<FunctionParameter> functionParameters;
-        std::vector<FunctionCall> functionCalls;
         FunctionDefinition currentFunction;
         uint32_t parseWordIndex = SpvStartWordIndex;
         uint32_t entryPointFunctionId = UINT32_MAX;
@@ -1115,7 +1157,6 @@ namespace respv {
         std::sort(functionDefinitions.begin(), functionDefinitions.end());
 
         // Find the entry point function and mark that it shouldn't be inlined.
-        typedef std::vector<FunctionDefinition>::iterator FunctionDefinitionIterator;
         FunctionDefinitionIterator entryFunctionIt = std::lower_bound(functionDefinitions.begin(), functionDefinitions.end(), entryPointFunctionId);
         if (entryFunctionIt == functionDefinitions.end()) {
             fprintf(stderr, "Unable to find entry point function %d.\n", entryPointFunctionId);
@@ -1126,17 +1167,6 @@ namespace respv {
 
         // Do a first iteration pass with the functions that can't be inlined as the starting points of the stack.
         // This pass will figure out the total size required for the final inlined shader.
-        struct FunctionItem {
-            FunctionDefinitionIterator function = {};
-            FunctionDefinitionIterator rootFunction = {};
-            uint32_t callIndex = 0;
-
-            FunctionItem(FunctionDefinitionIterator function, FunctionDefinitionIterator rootFunction, uint32_t callIndex) : function(function), rootFunction(rootFunction), callIndex(callIndex) {
-                // Regular constructor.
-            }
-        };
-
-        std::vector<FunctionItem> functionStack;
         FunctionDefinitionIterator startFunctionIt = functionDefinitions.begin();
         while (startFunctionIt != functionDefinitions.end()) {
             if (!startFunctionIt->canInline) {
@@ -1201,16 +1231,6 @@ namespace respv {
         // To avoid reallocation of these unless the shader really warrants it, we reserve some memory for these vectors.
         uint32_t &inlinedIdBound = inlinedSpirvWords[3];
         uint32_t dstWordIndex = SpvStartWordIndex;
-        std::vector<CallItem> callStack;
-        std::vector<uint32_t> shaderResultMap;
-        std::vector<uint32_t> storeMap;
-        std::vector<uint32_t> storeMapChanges;
-        std::vector<uint32_t> loadMap;
-        std::vector<uint32_t> loadMapChanges;
-        std::vector<uint32_t> phiMap;
-        std::vector<uint32_t> opPhis;
-        constexpr size_t ReservationForRecursionDepth = 8;
-        callStack.reserve(ReservationForRecursionDepth);
         shaderResultMap.resize(dataIdBound, UINT32_MAX);
         storeMap.resize(dataIdBound, UINT32_MAX);
         loadMap.resize(dataIdBound, UINT32_MAX);
@@ -1297,7 +1317,8 @@ namespace respv {
             if (SpvHasLabels(opCode, labelWordStart, labelWordCount, labelWordStride, true)) {
                 for (uint32_t j = 0; (j < labelWordCount) && ((labelWordStart + j * labelWordStride) < wordCount); j++) {
                     uint32_t labelWordIndex = labelWordStart + j * labelWordStride;
-                    callStack.back().remapsPending.emplace_back(copyWordIndex + labelWordIndex);
+                    remapsPending.emplace_back(copyWordIndex + labelWordIndex);
+                    callStack.back().remapsPendingCount++;
                 }
             }
 
@@ -1346,8 +1367,9 @@ namespace respv {
                     loadMapChanges.pop_back();
                 }
 
-                callStack.back().sameBlockOperations.clear();
+                sameBlockOperations.resize(sameBlockOperations.size() - callStack.back().sameBlockOperationsCount);
                 callStack.back().blockId = dataWords[callWordIndex + 1];
+                callStack.back().sameBlockOperationsCount = 0;
                 break;
             case SpvOpFunction: {
                 uint32_t functionId = dataWords[callWordIndex + 2];
@@ -1385,8 +1407,8 @@ namespace respv {
                 break;
             case SpvOpFunctionEnd: {
                 // Apply any pending remappings from instructions with labels.
-                for (uint32_t remapPending : callStack.back().remapsPending) {
-                    uint32_t &resultId = inlinedSpirvWords[remapPending];
+                for (size_t i = remapsPending.size() - callStack.back().remapsPendingCount; i < remapsPending.size(); i++) {
+                    uint32_t &resultId = inlinedSpirvWords[remapsPending[i]];
                     if (shaderResultMap[resultId] != UINT32_MAX) {
                         resultId = shaderResultMap[resultId];
                     }
@@ -1417,12 +1439,12 @@ namespace respv {
                     inlinedSpirvWords[dstWordIndex++] = callStack.back().returnBlockId;
 
                     // If the function only returns one possible value, the caller instead will just remap the result to this one.
-                    if (callStack.back().returnParameters.size() == 2) {
+                    if (callStack.back().returnParametersCount == 2) {
                         uint32_t functionResultId = callStack.back().resultId;
-                        shaderResultMap[functionResultId] = callStack.back().returnParameters[0];
+                        shaderResultMap[functionResultId] = returnParameters[returnParameters.size() - callStack.back().returnParametersCount];
                     }
                     // Insert an OpPhi for selecting the result from a function call that called a function that returns multiple values.
-                    else if (callStack.back().returnParameters.size() > 2) {
+                    else if (callStack.back().returnParametersCount > 2) {
                         // Remap the function result if necessary.
                         const CallItem &previousCallStack = callStack[callStack.size() - 2];
                         uint32_t functionResultId = callStack.back().resultId;
@@ -1433,13 +1455,13 @@ namespace respv {
                         }
 
                         opPhis.emplace_back(dstWordIndex);
-                        inlinedSpirvWords[dstWordIndex++] = SpvOpPhi | ((3 + callStack.back().returnParameters.size()) << 16U);
+                        inlinedSpirvWords[dstWordIndex++] = SpvOpPhi | ((3 + callStack.back().returnParametersCount) << 16U);
                         inlinedSpirvWords[dstWordIndex++] = callStack.back().resultType;
                         inlinedSpirvWords[dstWordIndex++] = functionResultId;
 
                         // Copy the OpPhi arguments directly.
-                        for (size_t i = 0; i < callStack.back().returnParameters.size(); i++) {
-                            inlinedSpirvWords[dstWordIndex++] = callStack.back().returnParameters[i];
+                        for (size_t i = returnParameters.size() - callStack.back().returnParametersCount; i < returnParameters.size(); i++) {
+                            inlinedSpirvWords[dstWordIndex++] = returnParameters[i];
                         }
                     }
 
@@ -1447,12 +1469,15 @@ namespace respv {
                 }
 
                 // Pop this stack level and return to iterating on the previous one.
+                remapsPending.resize(remapsPending.size() - callStack.back().remapsPendingCount);
+                returnParameters.resize(returnParameters.size() - callStack.back().returnParametersCount);
+                sameBlockOperations.resize(sameBlockOperations.size() - callStack.back().sameBlockOperationsCount);
                 callStack.pop_back();
 
                 if (!callStack.empty()) {
                     // Copy the same block operations and rename the results even if the function wasn't inlined.
-                    for (uint32_t sameBlockWordIndex : callStack.back().sameBlockOperations) {
-                        copyInstruction(sameBlockWordIndex, true, dstWordIndex, copyDecorationIndex);
+                    for (size_t i = sameBlockOperations.size() - callStack.back().sameBlockOperationsCount; i < sameBlockOperations.size(); i++) {
+                        copyInstruction(sameBlockOperations[i], true, dstWordIndex, copyDecorationIndex);
                         copyDecorations(copyDecorationIndex, dstInlinedDecorationWordIndex);
                     }
 
@@ -1591,8 +1616,9 @@ namespace respv {
                         operandId = shaderResultMap[operandId];
                     }
 
-                    callStack.back().returnParameters.emplace_back(operandId);
-                    callStack.back().returnParameters.emplace_back(callStack.back().blockId);
+                    returnParameters.emplace_back(operandId);
+                    returnParameters.emplace_back(callStack.back().blockId);
+                    callStack.back().returnParametersCount += 2;
                 }
                 else {
                     // Copy as is.
@@ -1653,7 +1679,8 @@ namespace respv {
                 break;
             case SpvOpImage:
             case SpvOpSampledImage: {
-                callStack.back().sameBlockOperations.emplace_back(callStack.back().wordIndex);
+                sameBlockOperations.emplace_back(callStack.back().wordIndex);
+                callStack.back().sameBlockOperationsCount++;
                 break;
             }
             default:
@@ -1786,11 +1813,18 @@ namespace respv {
         // Greatly decreases the costs of adding nodes to the linked list.
         listNodes.reserve(instructions.size() * 2);
 
+        thread_local std::vector<uint32_t> loopMergeBlockStack;
+        thread_local std::vector<uint32_t> loopMergeInstructionStack;
+        thread_local std::vector<bool> preOrderVisitedBlocks;
+        thread_local std::vector<bool> postOrderVisitedBlocks;
+        loopMergeBlockStack.clear();
+        loopMergeInstructionStack.clear();
+        preOrderVisitedBlocks.clear();
+        postOrderVisitedBlocks.clear();
+
         bool foundOpSwitch = false;
         const uint32_t *dataWords = reinterpret_cast<const uint32_t *>(pData);
         const size_t dataWordCount = pSize / sizeof(uint32_t);
-        std::vector<uint32_t> loopMergeBlockStack;
-        std::vector<uint32_t> loopMergeInstructionStack;
         uint32_t currentBlockId = 0;
         uint32_t currentLoopHeaderIndex = 0;
         for (uint32_t i = 0; i < uint32_t(instructions.size()); i++) {
@@ -1981,8 +2015,8 @@ namespace respv {
         
         // Do a pre-order and post-order traversal of the tree starting from each function. These indices are
         // later used to figure out whether instructions dominate other instructions when doing optimizations.
-        std::vector<bool> preOrderVisitedBlocks;
-        std::vector<bool> postOrderVisitedBlocks;
+        thread_local std::vector<uint32_t> blockIndexStack;
+        thread_local std::vector<uint32_t> blockAdjacentStack;
         uint32_t preOrderIndex = 0;
         uint32_t postOrderIndex = 0;
         blockPreOrderIndices.resize(blocks.size(), 0);
@@ -1992,8 +2026,8 @@ namespace respv {
         for (uint32_t i = 0; i < uint32_t(functions.size()); i++) {
             const Function &function = functions[i];
             const Instruction &functionLabelInstruction = instructions[function.labelInstructionIndex];
-            std::vector<uint32_t> blockIndexStack;
-            std::vector<uint32_t> blockAdjacentStack;
+            blockIndexStack.clear();
+            blockAdjacentStack.clear();
             blockIndexStack.emplace_back(functionLabelInstruction.blockIndex);
             blockAdjacentStack.emplace_back(UINT32_MAX);
             while (!blockIndexStack.empty()) {
@@ -2078,14 +2112,18 @@ namespace respv {
             }
         }
 
+        // Sort degrees doesn't need to be cleared as its contents will be copied over.
+        thread_local std::vector<uint32_t> sortDegrees;
+        thread_local std::vector<uint32_t> instructionStack;
+        thread_local std::vector<InstructionSort> instructionSortVector;
+        instructionStack.clear();
+        instructionSortVector.clear();
+
         // Make a copy of the degrees as they'll be used to perform a topological sort.
-        std::vector<uint32_t> sortDegrees;
         sortDegrees.resize(instructionInDegrees.size());
         memcpy(sortDegrees.data(), instructionInDegrees.data(), sizeof(uint32_t) * sortDegrees.size());
 
         // The first nodes to be processed should be the ones with no incoming connections.
-        std::vector<uint32_t> instructionStack;
-        instructionStack.clear();
         for (uint32_t i = 0; i < uint32_t(instructions.size()); i++) {
             if (sortDegrees[i] == 0) {
                 instructionStack.emplace_back(i);
@@ -2126,8 +2164,6 @@ namespace respv {
             return false;
         }
 
-        std::vector<InstructionSort> instructionSortVector;
-        instructionSortVector.clear();
         instructionSortVector.resize(instructionOrder.size(), InstructionSort());
         for (uint32_t instructionIndex : instructionOrder) {
             uint64_t nextLevel = instructionSortVector[instructionIndex].instructionLevel + 1;

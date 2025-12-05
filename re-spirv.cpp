@@ -955,7 +955,7 @@ namespace respv {
                 break;
             case SpvOpDecorate: {
                 uint32_t resultId = dataWords[parseWordIndex + 1];
-                if (resultId > dataIdBound) {
+                if (resultId >= dataIdBound) {
                     fprintf(stderr, "Found decoration with invalid result %u.\n", resultId);
                     return false;
                 }
@@ -970,7 +970,7 @@ namespace respv {
                 if (currentFunction.resultId != UINT32_MAX) {
                     // Identify the variable as a local function variable.
                     uint32_t resultId = dataWords[parseWordIndex + 2];
-                    if (resultId > dataIdBound) {
+                    if (resultId >= dataIdBound) {
                         fprintf(stderr, "Found variable with invalid result %u.\n", resultId);
                         return false;
                     }
@@ -1607,7 +1607,7 @@ namespace respv {
                 // Ignore load operations with memory operands.
                 if (wordCount == 4) {
                     uint32_t pointerId = dataWords[callStack.back().wordIndex + 3];
-                    if (pointerId > dataIdBound) {
+                    if (pointerId >= dataIdBound) {
                         fprintf(stderr, "Found load operation with invalid pointer %u.\n", pointerId);
                         return false;
                     }
@@ -1629,13 +1629,13 @@ namespace respv {
                 // Ignore store operations with memory operands.
                 if (wordCount == 3) {
                     uint32_t pointerId = dataWords[callStack.back().wordIndex + 1];
-                    if (pointerId > dataIdBound) {
+                    if (pointerId >= dataIdBound) {
                         fprintf(stderr, "Found store operation with invalid pointer %u.\n", pointerId);
                         return false;
                     }
 
                     uint32_t resultId = dataWords[callStack.back().wordIndex + 2];
-                    if (resultId > dataIdBound) {
+                    if (resultId >= dataIdBound) {
                         fprintf(stderr, "Found store operation with invalid result %u.\n", resultId);
                         return false;
                     }

@@ -759,6 +759,7 @@ namespace respv {
         phis.clear();
         loopHeaders.clear();
         listNodes.clear();
+        defaultSwitchOpConstantInt = UINT32_MAX;
     }
 
     constexpr uint32_t SpvStartWordIndex = 5;
@@ -2210,20 +2211,24 @@ namespace respv {
         extSpirvWordCount = pSize / sizeof(uint32_t);
 
         if (pInlineFunctions && !inlineData(pData, pSize)) {
+            clear();
             return false;
         }
 
         const void *data = pInlineFunctions ? inlinedSpirvWords.data() : pData;
         const size_t size = pInlineFunctions ? (inlinedSpirvWords.size() * sizeof(uint32_t)) : pSize;
         if (!parseData(data, size)) {
+            clear();
             return false;
         }
 
         if (!process(data, size)) {
+            clear();
             return false;
         }
 
         if (!sort(data, size)) {
+            clear();
             return false;
         }
 
@@ -2231,7 +2236,7 @@ namespace respv {
     }
 
     bool Shader::empty() const {
-        return false;
+        return inlinedSpirvWords.empty() && ((extSpirvWords == nullptr) || (extSpirvWordCount == 0));
     }
 
     // Optimizer

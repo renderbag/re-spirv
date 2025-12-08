@@ -91,8 +91,13 @@ namespace respv {
         case SpvOpImageRead:
         case SpvOpImageWrite:
         case SpvOpImage:
+        case SpvOpImageQueryFormat:
+        case SpvOpImageQueryOrder:
         case SpvOpImageQuerySizeLod:
+        case SpvOpImageQuerySize:
+        case SpvOpImageQueryLod:
         case SpvOpImageQueryLevels:
+        case SpvOpImageQuerySamples:
         case SpvOpConvertFToU:
         case SpvOpConvertFToS:
         case SpvOpConvertSToF:
@@ -326,7 +331,11 @@ namespace respv {
         case SpvOpCopyObject:
         case SpvOpTranspose:
         case SpvOpImage:
+        case SpvOpImageQueryFormat:
+        case SpvOpImageQueryOrder:
+        case SpvOpImageQuerySize:
         case SpvOpImageQueryLevels:
+        case SpvOpImageQuerySamples:
         case SpvOpConvertFToU:
         case SpvOpConvertFToS:
         case SpvOpConvertSToF:
@@ -362,6 +371,7 @@ namespace respv {
         case SpvOpCompositeInsert:
         case SpvOpSampledImage:
         case SpvOpImageQuerySizeLod:
+        case SpvOpImageQueryLod:
         case SpvOpIAdd:
         case SpvOpFAdd:
         case SpvOpISub:

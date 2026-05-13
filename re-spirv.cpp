@@ -2785,14 +2785,44 @@ namespace respv {
         
         if (opCode == SpvOpBranchConditional) {
             // Branch conditional only needs to choose either label depending on whether the result is true or false.
+            uint32_t prunedLabelId;
             if (operatorResolution.value.u32) {
                 defaultLabelId = optimizedWords[wordIndex + 2];
-                optimizerReduceLabelDegree(optimizedWords[wordIndex + 3], rContext);
+                prunedLabelId = optimizedWords[wordIndex + 3];
             }
             else {
                 defaultLabelId = optimizedWords[wordIndex + 3];
-                optimizerReduceLabelDegree(optimizedWords[wordIndex + 2], rContext);
+                prunedLabelId = optimizedWords[wordIndex + 2];
             }
+
+            // Detect whether the pruned edge is a loop back-edge (a branch from inside a loop
+            // back to the loop header). Back-edges are intentionally skipped when building the
+            // adjacency list (see Shader::process) to prevent infinite cycles during the
+            // topological sort, which means they don't contribute to the target's in-degree.
+            // Reducing the degree here would erroneously cascade-eliminate the loop header
+            // (and via OpLoopMerge, the merge block as well), corrupting the SPIR-V into an
+            // invalid form ("Branch must appear in a block"). Removing the back-edge would
+            // also break the structured loop, since OpLoopMerge requires the continue block
+            // to branch back to the header, so skip the optimization in this case.
+            bool isBackEdge = false;
+            const uint32_t branchBlockIndex = rContext.shader.instructions[pInstructionIndex].blockIndex;
+            const uint32_t prunedInstructionIndex = rContext.shader.results[prunedLabelId].instructionIndex;
+            if ((branchBlockIndex != UINT32_MAX) && (prunedInstructionIndex != UINT32_MAX)) {
+                const uint32_t prunedBlockIndex = rContext.shader.instructions[prunedInstructionIndex].blockIndex;
+                if (prunedBlockIndex != UINT32_MAX) {
+                    const uint32_t branchPreOrder = rContext.shader.blockPreOrderIndices[branchBlockIndex];
+                    const uint32_t prunedPreOrder = rContext.shader.blockPreOrderIndices[prunedBlockIndex];
+                    const uint32_t branchPostOrder = rContext.shader.blockPostOrderIndices[branchBlockIndex];
+                    const uint32_t prunedPostOrder = rContext.shader.blockPostOrderIndices[prunedBlockIndex];
+                    isBackEdge = (branchPreOrder > prunedPreOrder) && (branchPostOrder < prunedPostOrder);
+                }
+            }
+
+            if (isBackEdge) {
+                return;
+            }
+
+            optimizerReduceLabelDegree(prunedLabelId, rContext);
 
             // If there's a selection merge before this branch, we place the unconditional branch in its place.
             const uint32_t mergeWordCount = 3;
